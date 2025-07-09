@@ -1,0 +1,63 @@
+name: Chart Update on Deploy
+description: Action to update a Helm chart when deploying an application
+inputs:
+  pat:
+    description: PAT for accessing the application repo
+    required: true
+  env:
+    description: Name of the environment to deploy the application
+    required: true
+  chart-name:
+    description: Name of the chart getting deployed
+    required: true
+  chart-version:
+    description: Version of the chart to deploy
+    required: true
+  dependency:
+    description: Name of the dependency to update
+    required: true
+  project-id:
+    description: Google Cloud project ID
+    required: true
+  workload-identity-provider:
+    description: GCP Workload Identity Provider
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        repository: dharmalife-foundation/k8s-landscape-charts
+        token: ${{ inputs.pat }}
+
+    - name: Authenticate to Google Cloud
+      id: auth
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ inputs.workload-identity-provider }}
+        project_id: ${{ inputs.project-id }}
+
+    - name: Login to Azure Container Repository
+      run: |
+        helm registry login asia-south1-docker.pkg.dev --username oauth2accesstoken --password ${{ steps.auth.outputs.auth_token }}
+      shell: bash
+
+    - name: Update Dependency
+      run: |
+        cd ${{ inputs.chart-name }}/envs/${{ inputs.env }}
+        yq -i '(.dependencies[] | select(.name == "${{ inputs.dependency }}")).version = "${{ inputs.chart-version }}"' './Chart.yaml'
+        helm dependency update
+      shell: bash
+
+    - name: Commit Changes
+      env:
+        GIT_AUTHOR_NAME: Dharmalife
+        GIT_COMMITTER_NAME: Dharmalife
+        GIT_AUTHOR_EMAIL: github@beezlabs.com
+        GIT_COMMITTER_EMAIL: github@beezlabs.com
+      run: |
+        git add -A
+        git diff-index --quiet HEAD || git commit -m "feat: Update umbrella chart for ${{ inputs.chart-name }} in ${{ inputs.env }} environment for chart version ${{ inputs.chart-version }}"
+        git push
+      shell: bash
