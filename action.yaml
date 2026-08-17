@@ -16,6 +16,10 @@ inputs:
   dependency:
     description: Name of the dependency to update
     required: true
+  image-tag:
+    description: Optional container image tag to set under the dependency alias in values.yaml
+    required: false
+    default: ""
   project-id:
     description: Google Cloud project ID
     required: true
@@ -45,8 +49,23 @@ runs:
 
     - name: Update Dependency
       run: |
-        cd ${{ inputs.chart-name }}/envs/${{ inputs.env }}
+        set -euo pipefail
+        cd "${{ inputs.chart-name }}/envs/${{ inputs.env }}"
+
         yq -i '(.dependencies[] | select(.name == "${{ inputs.dependency }}")).version = "${{ inputs.chart-version }}"' './Chart.yaml'
+
+        # Prod umbrella charts often pin image.tag; keep it in sync with the app
+        # version when provided so deploys do not keep serving an old image.
+        if [ -n "${{ inputs.image-tag }}" ]; then
+          values_key="$(yq -r '.dependencies[] | select(.name == "${{ inputs.dependency }}") | .alias // .name' './Chart.yaml')"
+          if yq -e ".\"${values_key}\".image" './values.yaml' >/dev/null 2>&1; then
+            yq -i ".\"${values_key}\".image.tag = \"${{ inputs.image-tag }}\"" './values.yaml'
+            echo "Updated ${values_key}.image.tag to ${{ inputs.image-tag }}"
+          else
+            echo "No image block found for ${values_key}; skipping image.tag update"
+          fi
+        fi
+
         helm dependency update
       shell: bash
 
@@ -58,6 +77,11 @@ runs:
         GIT_COMMITTER_EMAIL: github@beezlabs.com
       run: |
         git add -A
-        git diff-index --quiet HEAD || git commit -m "feat: Update umbrella chart for ${{ inputs.chart-name }} in ${{ inputs.env }} environment for chart version ${{ inputs.chart-version }}"
+        if [ -n "${{ inputs.image-tag }}" ]; then
+          msg="feat: Update umbrella chart for ${{ inputs.chart-name }} in ${{ inputs.env }} environment for chart version ${{ inputs.chart-version }} (image tag ${{ inputs.image-tag }})"
+        else
+          msg="feat: Update umbrella chart for ${{ inputs.chart-name }} in ${{ inputs.env }} environment for chart version ${{ inputs.chart-version }}"
+        fi
+        git diff-index --quiet HEAD || git commit -m "$msg"
         git push
       shell: bash
